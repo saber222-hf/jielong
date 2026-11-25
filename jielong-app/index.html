@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#ff8c00">
+<title>接龙抢报助手</title>
+<style>
+  :root { --main:#ff8c00; --bg:#f5f6f8; --card:#fff; --text:#222; --sub:#888; --ok:#22a06b; --err:#e5484d; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); font-size:15px; }
+  header { background:linear-gradient(135deg,#ff9d2e,#ff7a00); color:#fff; padding:16px; text-align:center; font-size:18px; font-weight:600; }
+  .wrap { max-width:560px; margin:0 auto; padding:12px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; box-shadow:0 2px 10px rgba(0,0,0,.05); }
+  .card h3 { margin:0 0 10px; font-size:15px; color:#444; display:flex; align-items:center; justify-content:space-between; }
+  label { display:block; font-size:13px; color:var(--sub); margin:10px 0 5px; }
+  input, textarea, select { width:100%; padding:11px 12px; border:1px solid #e3e5e8; border-radius:10px; font-size:15px; background:#fafbfc; outline:none; }
+  input:focus, textarea:focus, select:focus { border-color:var(--main); background:#fff; }
+  textarea { min-height:80px; resize:vertical; font-family:inherit; }
+  button { border:0; border-radius:10px; padding:12px 16px; font-size:15px; font-weight:600; cursor:pointer; background:var(--main); color:#fff; width:100%; margin-top:10px; }
+  button.ghost { background:#eef0f3; color:#333; }
+  button:disabled { opacity:.5; }
+  .row { display:flex; gap:10px; }
+  .row > * { flex:1; }
+  .switch { position:relative; width:56px; height:30px; flex:none; }
+  .switch input { display:none; }
+  .slider { position:absolute; inset:0; background:#ccc; border-radius:30px; transition:.2s; }
+  .slider:before { content:""; position:absolute; width:24px; height:24px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow:0 1px 3px rgba(0,0,0,.2); }
+  .switch input:checked + .slider { background:var(--ok); }
+  .switch input:checked + .slider:before { transform:translateX(26px); }
+  .slot-list { max-height:300px; overflow:auto; border:1px solid #eee; border-radius:10px; margin-top:8px; }
+  .slot { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid #f2f2f2; font-size:13px; }
+  .slot:last-child { border-bottom:0; }
+  .slot input { width:auto; flex:none; accent-color:var(--main); }
+  .slot .name { flex:1; word-break:break-all; }
+  .slot .tag { flex:none; font-size:11px; padding:2px 7px; border-radius:20px; background:#eef7f1; color:var(--ok); }
+  .slot .tag.taken { background:#fdecec; color:var(--err); }
+  #log { font-family:ui-monospace,Consolas,monospace; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-all; max-height:260px; overflow:auto; background:#0f1419; color:#c9d1d9; border-radius:10px; padding:12px; }
+  .muted { color:var(--sub); font-size:12px; line-height:1.5; }
+  .badge { font-size:12px; color:#fff; background:var(--main); padding:3px 9px; border-radius:20px; }
+  .hidden { display:none !important; }
+  #qrBox { text-align:center; }
+  #qrBox img { width:220px; height:220px; border:1px solid #eee; border-radius:12px; }
+  .statusdot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#ccc; margin-right:6px; }
+  .statusdot.on { background:var(--ok); box-shadow:0 0 0 3px rgba(34,160,107,.2); }
+</style>
+</head>
+<body>
+<header>接龙抢报助手</header>
+<div class="wrap">
+
+  <!-- 账号 -->
+  <div class="card">
+    <h3>账号 <span id="accName" class="muted">未登录</span></h3>
+    <select id="accSel" class="hidden" onchange="switchAccount()"></select>
+    <button id="loginBtn" onclick="startLogin()">扫码添加账号</button>
+    <div id="qrBox" class="hidden" style="margin-top:12px">
+      <img id="qrImg" alt="二维码">
+      <div class="muted" style="margin-top:8px">用微信扫一扫（手机可先截图，再在微信「扫一扫 → 相册」里选这张图）</div>
+      <button class="ghost" onclick="cancelLogin()">取消</button>
+    </div>
+  </div>
+
+  <!-- 接龙 -->
+  <div class="card">
+    <h3>接龙</h3>
+    <label>接龙链接 / 短码</label>
+    <input id="threadInput" placeholder="粘贴：https://jielong.com/s/... 或 #小程序://接龙管家/xxx 或短码" oninput="onThreadInput()">
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" onclick="loadSlots()">获取岗位列表</button>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:14px;color:#333">
+      <input type="checkbox" id="autoMode" checked style="width:auto" onchange="saveConfig()">
+      <span>粘贴链接后自动获取岗位并开抢</span>
+    </label>
+    <div id="threadInfo" class="muted" style="margin-top:8px"></div>
+    <div id="slotWrap" class="hidden">
+      <label>勾选想要抢的岗位（按优先级从上到下）</label>
+      <div id="slotList" class="slot-list"></div>
+    </div>
+  </div>
+
+  <!-- 运行 -->
+  <div class="card">
+    <h3>自动抢报
+      <span class="switch"><input type="checkbox" id="enable" onchange="onToggle()"><span class="slider"></span></span>
+    </h3>
+    <div class="row">
+      <div><label>轮询间隔(毫秒)</label><input id="interval" type="number" value="200" onchange="saveConfig()"></div>
+    </div>
+    <div class="muted" style="margin-top:8px">开启后建议让本页面保持在前台，不要锁屏。</div>
+    <div style="margin-top:10px"><span class="statusdot" id="dot"></span><span id="runState" class="muted">已暂停</span></div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="card">
+    <h3>运行日志</h3>
+    <div id="log"></div>
+  </div>
+
+  <div class="muted" style="text-align:center;padding-bottom:20px">
+    数据仅保存在本机浏览器 · 关闭页面即停止运行
+  </div>
+</div>
+
+<script>
+const API = "https://i-api.jielong.com";
+const $ = id => document.getElementById(id);
+
+/* ---------- 本地存储 ---------- */
+const LS = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
+};
+let accounts = LS.get("jl_accounts", []);
+let activeIdx = LS.get("jl_active", -1);
+let targets = LS.get("jl_targets", []);
+let grabbing = false;
+let loginTimer = null;
+
+/* ---------- 日志 ---------- */
+function log(msg){
+  const el = $("log");
+  const t = new Date().toLocaleTimeString();
+  el.textContent += `[${t}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+/* ---------- 基础请求 ---------- */
+function headers(token){
+  const h = { "platform":"pc" };
+  if(token) h["Authorization"] = "Bearer " + token;
+  return h;
+}
+async function api(path, {method="GET", body=null, token=null} = {}){
+  const opt = { method, headers: headers(token) };
+  if(body){ opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const res = await fetch(API + path, opt);
+  const text = await res.text();
+  let data; try{ data = JSON.parse(text); }catch(e){ data = text; }
+  return data;
+}
+
+/* ---------- 账号 ---------- */
+function currentToken(){ return (activeIdx >= 0 && accounts[activeIdx]) ? accounts[activeIdx].token : null; }
+
+function renderAccounts(){
+  const sel = $("accSel");
+  if(accounts.length > 0){
+    sel.classList.remove("hidden");
+    sel.innerHTML = accounts.map((a,i)=>`<option value="${i}" ${i===activeIdx?"selected":""}>${a.nickname||("账号"+(i+1))}</option>`).join("");
+    $("accName").textContent = "当前：" + (accounts[activeIdx]?.nickname || "未选");
+  } else {
+    sel.classList.add("hidden");
+    $("accName").textContent = "未登录";
+  }
+}
+function switchAccount(){
+  activeIdx = parseInt($("accSel").value);
+  LS.set("jl_active", activeIdx);
+  renderAccounts();
+  log("已切换账号：" + (accounts[activeIdx]?.nickname || activeIdx));
+}
+function saveAccount(token){
+  // 用 CurrentUser 拿昵称
+  return api("/api/User/CurrentUser", {token}).then(r=>{
+    let nick = "微信用户";
+    if(r && r.Data && r.Data.Nickname) nick = r.Data.Nickname;
+    const exist = accounts.findIndex(a=>a.token===token);
+    if(exist >= 0){ accounts[exist].nickname = nick; activeIdx = exist; }
+    else { accounts.push({token, nickname:nick, time:Date.now()}); activeIdx = accounts.length-1; }
+    LS.set("jl_accounts", accounts); LS.set("jl_active", activeIdx);
+    renderAccounts();
+    return nick;
+  });
+}
+
+/* 从任意 JSON 里找 JWT */
+function findJwt(o){
+  const re = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+  const stack = [o];
+  while(stack.length){
+    const v = stack.pop();
+    if(typeof v === "string" && re.test(v)) return v;
+    else if(v && typeof v === "object"){ for(const k in v) stack.push(v[k]); }
+  }
+  return null;
+}
+function extractToken(data){
+  let t = findJwt(data);
+  if(t) return t;
+  if(data && data.RedirectUrl){
+    try{ const u = new URL(data.RedirectUrl, "https://i.jielong.com");
+      for(const [k,v] of u.searchParams){ if(v && v.startsWith("eyJ")) return v; }
+    }catch(e){}
+  }
+  return null;
+}
+
+async function startLogin(){
+  $("loginBtn").disabled = true;
+  $("qrBox").classList.remove("hidden");
+  log("正在获取登录二维码...");
+  let qr;
+  try{ qr = await api("/api/User/PcLoginQrCode"); }
+  catch(e){ log("获取二维码失败：" + e); $("loginBtn").disabled = false; return; }
+  if(!qr || qr.Type !== "000001"){ log("获取二维码失败：" + JSON.stringify(qr)); $("loginBtn").disabled = false; return; }
+  const code = qr.Data.Code;
+  $("qrImg").src = qr.Data.Url;
+  log("请用微信扫码（手机可截图后在微信「扫一扫→相册」选择）");
+  let tries = 0;
+  loginTimer = setInterval(async ()=>{
+    tries++;
+    if(tries > 80){ cancelLogin(); log("二维码已失效，请重新点击登录"); return; }
+    try{
+      const s = await api("/api/User/CheckLoginStatus?code=" + encodeURIComponent(code));
+      const d = s && s.Data;
+      if(d && d.Error){
+        clearInterval(loginTimer); loginTimer = null;
+        $("qrBox").classList.add("hidden"); $("loginBtn").disabled = false;
+        log("登录失败：" + d.Error);
+        return;
+      }
+      if(d && d.Status === 2 && d.Token){
+        const tok = String(d.Token).replace(/^Bearer\s+/i, "");
+        clearInterval(loginTimer); loginTimer = null;
+        $("qrBox").classList.add("hidden"); $("loginBtn").disabled = false;
+        const nick = await saveAccount(tok);
+        log("登录成功：" + nick);
+      }
+    }catch(e){ /* 忽略轮询错误 */ }
+  }, 1500);
+}
+function cancelLogin(){
+  if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
+  $("qrBox").classList.add("hidden");
+  $("loginBtn").disabled = false;
+}
+
+/* ---------- 解析接龙 ---------- */
+function parseThreadInput(input){
+  input = (input||"").trim();
+  let m;
+  m = input.match(/\/s\/([A-Za-z0-9+/=]+)/);
+  if(m){
+    try{
+      const s = atob(m[1]);
+      const parts = s.split(",");
+      const num = parts[parts.length-1].trim();
+      if(/^\d+$/.test(num)) return { numeric: Number(num) };
+    }catch(e){}
+  }
+  m = input.match(/\/fb\/([A-Za-z0-9]+)/);
+  if(m) return { str: m[1] };
+  m = input.match(/#小程序:\/\/[^\/]+\/([A-Za-z0-9]+)/);
+  if(m) return { str: m[1] };
+  if(/^\d{6,}$/.test(input)) return { numeric: Number(input) };
+  if(/^[A-Za-z0-9]{6,}$/.test(input)) return { str: input };
+  return null;
+}
+async function resolveThread(parsed, token){
+  if(parsed.numeric) return parsed.numeric;
+  const r = await api("/api/FeedBack/ThreadDetail?threadId=" + parsed.str, {token});
+  if(r && r.Type === "000001" && r.Data && r.Data.Thread) return r.Data.Thread.ThreadId;
+  throw new Error("解析接龙失败：" + JSON.stringify(r).slice(0,200));
+}
+
+/* ---------- 岗位列表 ---------- */
+async function loadSlots(){
+  const token = currentToken();
+  if(!token){ alert("请先登录账号"); return; }
+  const parsed = parseThreadInput($("threadInput").value);
+  if(!parsed){ alert("请先粘贴有效的接龙链接或短码"); return; }
+  $("threadInfo").textContent = "解析中...";
+  try{
+    const tid = await resolveThread(parsed, token);
+    LS.set("jl_thread", { input:$("threadInput").value, tid, str: parsed.str||null });
+    const [detail, scope, simple] = await Promise.all([
+      api("/api/FeedBack/ThreadDetail?threadId=" + tid, {token}),
+      api("/api/Thread/FeedBack/NameScope?threadId=" + tid, {token}),
+      api("/api/Thread/FeedBack/SimpleRecords?threadId=" + tid, {token})
+    ]);
+    const taken = new Set((simple.Data||[]).map(x=>x.Signature));
+    const slots = [];
+    (scope.Data?.Scopes||[]).forEach(g => (g.Scopes||[]).forEach(s => slots.push(s.Name)));
+    // 只保留本次接龙里真实存在的目标
+    targets = targets.filter(t => slots.includes(t));
+    LS.set("jl_targets", targets);
+    $("threadInfo").textContent = (detail.Data?.Thread?.Subject || "接龙") + ` · ${slots.length} 个岗位 · 已报 ${taken.size}`;
+    const box = $("slotList");
+    box.innerHTML = slots.map((name,i)=>{
+      const isTaken = taken.has(name);
+      const checked = targets.includes(name) ? "checked" : "";
+      return `<label class="slot"><input type="checkbox" data-name="${encodeURIComponent(name)}" ${checked} ${isTaken?"disabled":""} onchange="onSlotChange(this)">
+        <span class="name">${name.replace(/</g,"&lt;")}</span>
+        <span class="tag ${isTaken?"taken":""}">${isTaken?"已抢":"可抢"}</span></label>`;
+    }).join("");
+    $("slotWrap").classList.remove("hidden");
+    log("岗位列表已加载：" + slots.length + " 个，已报 " + taken.size);
+  }catch(e){
+    $("threadInfo").textContent = "加载失败：" + e.message;
+    log("加载岗位失败：" + e.message);
+  }
+}
+function onSlotChange(cb){
+  const name = decodeURIComponent(cb.dataset.name);
+  if(cb.checked){ if(!targets.includes(name)) targets.push(name); }
+  else { targets = targets.filter(t=>t!==name); }
+  LS.set("jl_targets", targets);
+}
+
+/* ---------- 抢报主循环 ---------- */
+function setRunning(on){
+  grabbing = on;
+  $("dot").classList.toggle("on", on);
+  $("runState").textContent = on ? "运行中…" : "已暂停";
+}
+async function onToggle(){
+  const on = $("enable").checked;
+  if(on) await startGrab();
+  else stopGrab();
+}
+function stopGrab(){ setRunning(false); }
+
+async function startGrab(){
+  const token = currentToken();
+  if(!token){ alert("请先登录账号"); $("enable").checked=false; return; }
+  if(targets.length === 0){ alert("请先勾选目标岗位"); $("enable").checked=false; return; }
+  const parsed = parseThreadInput($("threadInput").value);
+  if(!parsed){ alert("请先填写接龙链接或短码"); $("enable").checked=false; return; }
+  let tid;
+  try{ tid = await resolveThread(parsed, token); }
+  catch(e){ alert("解析接龙失败：" + e.message); $("enable").checked=false; return; }
+  const interval = Math.max(100, parseInt($("interval").value)||200);
+  setRunning(true);
+  log("开始抢报（接龙 " + tid + "），目标 " + targets.length + " 个岗位，间隔 " + interval + "ms");
+
+  let notYetLogged = false;
+  while(grabbing){
+    let delay = interval;
+    try{
+      const det = await api("/api/FeedBack/ThreadDetail?threadId=" + tid, {token});
+      if(!det || det.Type !== "000001" || typeof det.Data === "string" || !det.Data || !det.Data.FeedBack){
+        log("读取接龙失败（令牌可能已过期，请重新扫码登录）：" + JSON.stringify(det).slice(0,180));
+        $("enable").checked = false; setRunning(false);
+        return;
+      }
+      const fb = det.Data.FeedBack;
+      if(fb.IsEnd){
+        log("接龙已结束，停止等待");
+        $("enable").checked = false; setRunning(false);
+        return;
+      }
+      if(!fb.IsStart){
+        if(!notYetLogged){
+          log("尚未开放（开始时间 " + (fb.StartTime || "未知") + "），自动等待中，到点立即抢…");
+          notYetLogged = true;
+        }
+        delay = 1000; // 等待期间放慢
+        // 临近开放时间(15秒内)提速到设定间隔
+        if(fb.StartTime){
+          const st = new Date(String(fb.StartTime).replace(/-/g, "/"));
+          if(!isNaN(st.getTime()) && st.getTime() - Date.now() <= 15000) delay = interval;
+        }
+      } else {
+        notYetLogged = false;
+        const simple = await api("/api/Thread/FeedBack/SimpleRecords?threadId=" + tid, {token});
+        const taken = new Set((simple.Data||[]).map(x=>x.Signature));
+        let submitted = false;
+        for(const slot of targets){
+          if(!grabbing) break;
+          if(taken.has(slot)) continue;
+          log("发现空闲 → " + slot);
+          const resp = await api("/api/FeedBack/AttendFeedBack", {
+            method:"POST", token,
+            body:{ ThreadId: tid, Signature: slot, RecordValues: [], Number: "", IsCurrentUser: true }
+          });
+          if(resp && resp.Type === "000001"){
+            log("✅ 抢到了：" + slot);
+            $("enable").checked = false;
+            setRunning(false);
+            alert("抢到了！\n" + slot);
+            return;
+          } else {
+            log("❌ 提交失败：" + (resp?.Description || JSON.stringify(resp)).slice(0,120));
+            taken.add(slot);
+          }
+          submitted = true;
+        }
+        if(!submitted) log("目标岗位均已被占，继续盯…");
+      }
+    }catch(e){
+      log("请求出错：" + e.message);
+    }
+    await new Promise(r=>setTimeout(r, delay));
+  }
+}
+
+/* ---------- 配置持久化 ---------- */
+function saveConfig(){
+  const cur = LS.get("jl_thread", {});
+  cur.input = $("threadInput").value;
+  LS.set("jl_thread", cur);
+  LS.set("jl_interval", parseInt($("interval").value)||200);
+  LS.set("jl_autoMode", $("autoMode").checked);
+}
+
+let inputTimer = null;
+function onThreadInput(){
+  saveConfig();
+  if(!$("autoMode").checked) return;
+  clearTimeout(inputTimer);
+  inputTimer = setTimeout(()=>{ autoRun(); }, 700);
+}
+async function autoRun(){
+  if(grabbing) return;
+  const parsed = parseThreadInput($("threadInput").value);
+  if(!parsed) return;
+  log("检测到链接，自动获取岗位…");
+  try{ await loadSlots(); }catch(e){ return; }
+  if(targets.length > 0){
+    log("自动模式：发现目标岗位，立即开抢");
+    $("enable").checked = true;
+    startGrab();
+  } else {
+    log("自动模式：岗位已加载，但保存的目标不在本次接龙里，请手动勾选");
+  }
+}
+
+/* ---------- 初始化 ---------- */
+(async function init(){
+  $("threadInput").value = LS.get("jl_thread", {}).input || "";
+  $("interval").value = LS.get("jl_interval", 200);
+  $("autoMode").checked = LS.get("jl_autoMode", true);
+  renderAccounts();
+  if(activeIdx < 0 && accounts.length > 0){ activeIdx = 0; LS.set("jl_active", 0); renderAccounts(); }
+  if(!targets.length) targets = LS.get("jl_targets", []);
+  log("就绪。请先登录账号，再粘贴接龙链接获取岗位。");
+})();
+</script>
+</body>
+</html>
