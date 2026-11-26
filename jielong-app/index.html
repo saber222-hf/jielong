@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#ff8c00">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="接龙抢报">
 <title>接龙抢报助手</title>
 <style>
   :root { --main:#ff8c00; --bg:#f5f6f8; --card:#fff; --text:#222; --sub:#888; --ok:#22a06b; --err:#e5484d; }
@@ -437,6 +442,13 @@ async function autoRun(){
   if(!targets.length) targets = LS.get("jl_targets", []);
   log("就绪。请先登录账号，再粘贴接龙链接获取岗位。");
 })();
+</script>
+<script>
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  });
+}
 </script>
 </body>
 </html>
