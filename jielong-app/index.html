@@ -78,6 +78,8 @@
       <input type="checkbox" id="autoMode" checked style="width:auto" onchange="saveConfig()">
       <span>粘贴链接后自动获取岗位并开抢</span>
     </label>
+    <label>报名姓名（按接龙要求填写，可留空）</label>
+    <input id="personName" placeholder="例如：张三" oninput="saveConfig()">
     <div id="threadInfo" class="muted" style="margin-top:8px"></div>
     <div id="slotWrap" class="hidden">
       <label>勾选想要抢的岗位（按优先级从上到下）</label>
@@ -95,6 +97,8 @@
     </div>
     <div class="muted" style="margin-top:8px">开启后建议让本页面保持在前台，不要锁屏。</div>
     <div style="margin-top:10px"><span class="statusdot" id="dot"></span><span id="runState" class="muted">已暂停</span></div>
+    <div class="muted" id="runInfo" style="margin-top:6px">最近检查：--　接龙开放：--</div>
+    <div class="muted" id="lastSubmit" style="margin-top:4px">上次提交：--</div>
   </div>
 
   <!-- 日志 -->
@@ -315,45 +319,113 @@ function onSlotChange(cb){
 }
 
 /* ---------- 抢报主循环 ---------- */
-function setRunning(on){
+let runSeq = 0;
+function setRunning(on, text){
   grabbing = on;
   $("dot").classList.toggle("on", on);
-  $("runState").textContent = on ? "运行中…" : "已暂停";
+  $("runState").textContent = text || (on ? "运行中…" : "已暂停");
+}
+function setRunInfo(t){ $("runInfo").textContent = t; }
+function setLastSubmit(t){ $("lastSubmit").textContent = "上次提交：" + t; }
+function stopGrab(){
+  runSeq++;
+  setRunning(false, "已暂停");
+  document.title = "已暂停 · 接龙抢报助手";
+  log("已手动停止");
 }
 async function onToggle(){
-  const on = $("enable").checked;
-  if(on) await startGrab();
-  else stopGrab();
+  if(grabbing){ stopGrab(); return; }
+  await startGrab();
 }
-function stopGrab(){ setRunning(false); }
+async function discoverNameField(tid, token){
+  // 1) 优先从 GetThreadDetailToEdit 取字段配置
+  try{
+    const r = await api("/api/FeedBack/GetThreadDetailToEdit?threadId=" + tid, {token});
+    const st = (r && r.Type === "000001" && r.Data && r.Data.FeedBack) ? r.Data.FeedBack.FeedBackSetting : null;
+    if(st){
+      const arr = st.Settings || [];
+      let f = arr.find(s => s.FieldType === 5 && /姓名|名字/.test(s.Name || "")) || arr.find(s => s.FieldType === 5);
+      if(f) return { id: f.Id, name: f.Name, required: !!f.IsRequired };
+      if(st.Signature) return { id: 0, name: st.Signature.Name, required: !!st.Signature.IsRequired, builtin: true };
+    }
+  }catch(e){}
+  // 2) 退而从已有报名记录里推断字段 ID
+  try{
+    const recs = await api("/api/FeedBack/GetPagingFeedBackRecords?threadId=" + tid + "&itemId=0&sortBy=1&pageIndex=1&pageSize=1&isGetAll=true", {token});
+    const first = ((recs && recs.Data) || [])[0];
+    if(first){
+      const d = await api("/api/FeedBack/GetFeedBackRecordDetail?threadId=" + tid + "&recordId=" + first.Id + "&isGetComment=true", {token});
+      const rvs = (d && d.Data && d.Data.RecordValues) || [];
+      const f = rvs.find(x => /姓名|名字/.test(x.FieldName || ""));
+      if(f) return { id: f.FieldId, name: f.FieldName, required: true, fromRecord: true };
+    }
+  }catch(e){}
+  return null;
+}
+function buildAttendBody(tid, slot, name, nameField, hasPreset){
+  const body = { ThreadId: tid, Signature: slot, RecordValues: [], Number: "", IsCurrentUser: true };
+  const n = (name || "").trim();
+  if(nameField && nameField.id > 0){
+    if(n){
+      body.RecordValues = [{ FieldId: nameField.id, Values: [], Texts: [n], OtherValue: "", MatrixValues: [], Files: [], Scores: [], HasValue: true }];
+    }
+  } else if(n && !hasPreset){
+    body.Signature = n;
+  }
+  return body;
+}
 
 async function startGrab(){
+  if(grabbing) return;
   const token = currentToken();
-  if(!token){ alert("请先登录账号"); $("enable").checked=false; return; }
-  if(targets.length === 0){ alert("请先勾选目标岗位"); $("enable").checked=false; return; }
+  if(!token){ $("enable").checked=false; setRunning(false,"未登录"); alert("请先登录账号"); return; }
   const parsed = parseThreadInput($("threadInput").value);
-  if(!parsed){ alert("请先填写接龙链接或短码"); $("enable").checked=false; return; }
+  if(!parsed){ $("enable").checked=false; setRunning(false,"未填链接"); alert("请先填写接龙链接或短码"); return; }
+  if(targets.length === 0){ $("enable").checked=false; setRunning(false,"未选岗位"); alert("请先「获取岗位列表」并勾选目标岗位"); return; }
   let tid;
   try{ tid = await resolveThread(parsed, token); }
-  catch(e){ alert("解析接龙失败：" + e.message); $("enable").checked=false; return; }
+  catch(e){ $("enable").checked=false; setRunning(false,"解析失败"); alert("解析接龙失败：" + e.message); return; }
+
   const interval = Math.max(100, parseInt($("interval").value)||200);
-  setRunning(true);
-  log("开始抢报（接龙 " + tid + "），目标 " + targets.length + " 个岗位，间隔 " + interval + "ms");
+  const name = ($("personName").value||"").trim();
+  const seq = ++runSeq;
+  $("enable").checked = true;
+  setRunning(true, "启动中…");
+  document.title = "运行中 · 接龙抢报助手";
+  log("开始抢报（接龙 " + tid + "）目标 " + targets.length + " 个，间隔 " + interval + "ms" + (name ? ("，姓名：" + name) : ""));
+
+  const nameField = await discoverNameField(tid, token);
+  if(nameField) log("检测到姓名字段：" + nameField.name + "（Id=" + nameField.id + "）");
+  let hasPreset = false;
+  try{
+    const d0 = await api("/api/FeedBack/ThreadDetail?threadId=" + tid, {token});
+    hasPreset = !!(d0 && d0.Data && d0.Data.Thread && d0.Data.Thread.NameRange);
+  }catch(e){}
+  if(nameField && nameField.id > 0 && nameField.required && !name){
+    $("enable").checked=false; setRunning(false,"需填姓名");
+    log("该接龙需要填写姓名，已停止，请在「报名姓名」中填写");
+    alert("该接龙需要填写姓名，请先在「报名姓名」输入框中填写");
+    return;
+  }
 
   let notYetLogged = false;
-  while(grabbing){
+  while(grabbing && seq === runSeq){
     let delay = interval;
     try{
       const det = await api("/api/FeedBack/ThreadDetail?threadId=" + tid, {token});
       if(!det || det.Type !== "000001" || typeof det.Data === "string" || !det.Data || !det.Data.FeedBack){
+        setRunning(false, "令牌过期/异常");
+        $("enable").checked = false;
+        document.title = "出错 · 接龙抢报助手";
         log("读取接龙失败（令牌可能已过期，请重新扫码登录）：" + JSON.stringify(det).slice(0,180));
-        $("enable").checked = false; setRunning(false);
         return;
       }
       const fb = det.Data.FeedBack;
       if(fb.IsEnd){
+        setRunning(false, "已结束");
+        $("enable").checked = false;
+        document.title = "已结束 · 接龙抢报助手";
         log("接龙已结束，停止等待");
-        $("enable").checked = false; setRunning(false);
         return;
       }
       if(!fb.IsStart){
@@ -361,41 +433,50 @@ async function startGrab(){
           log("尚未开放（开始时间 " + (fb.StartTime || "未知") + "），自动等待中，到点立即抢…");
           notYetLogged = true;
         }
-        delay = 1000; // 等待期间放慢
-        // 临近开放时间(15秒内)提速到设定间隔
+        setRunning(true, "等待开放");
+        document.title = "等待开放 · 接龙抢报助手";
+        setRunInfo("最近检查：" + new Date().toLocaleTimeString() + "　开放时间：" + (fb.StartTime || "未知"));
+        delay = 1000;
         if(fb.StartTime){
           const st = new Date(String(fb.StartTime).replace(/-/g, "/"));
           if(!isNaN(st.getTime()) && st.getTime() - Date.now() <= 15000) delay = interval;
         }
       } else {
         notYetLogged = false;
+        setRunning(true, "运行中");
+        setRunInfo("最近检查：" + new Date().toLocaleTimeString() + "　接龙已开放，正在抢");
+        document.title = "抢报中 · 接龙抢报助手";
         const simple = await api("/api/Thread/FeedBack/SimpleRecords?threadId=" + tid, {token});
         const taken = new Set((simple.Data||[]).map(x=>x.Signature));
         let submitted = false;
         for(const slot of targets){
-          if(!grabbing) break;
+          if(!grabbing || seq !== runSeq) break;
           if(taken.has(slot)) continue;
-          log("发现空闲 → " + slot);
-          const resp = await api("/api/FeedBack/AttendFeedBack", {
-            method:"POST", token,
-            body:{ ThreadId: tid, Signature: slot, RecordValues: [], Number: "", IsCurrentUser: true }
-          });
+          log("发现空闲 → " + slot + "，提交中…");
+          const body = buildAttendBody(tid, slot, name, nameField, hasPreset);
+          const resp = await api("/api/FeedBack/AttendFeedBack", { method:"POST", token, body });
           if(resp && resp.Type === "000001"){
             log("✅ 抢到了：" + slot);
+            setRunning(false, "✅ 已抢到");
             $("enable").checked = false;
-            setRunning(false);
+            document.title = "✅ 已抢到 · " + slot;
+            setLastSubmit("成功 · " + slot);
+            if(navigator.vibrate){ try{ navigator.vibrate([200,100,200]); }catch(e){} }
             alert("抢到了！\n" + slot);
             return;
           } else {
-            log("❌ 提交失败：" + (resp?.Description || JSON.stringify(resp)).slice(0,120));
+            const msg = (resp && (resp.Description || resp.Data)) || JSON.stringify(resp);
+            log("❌ 提交失败：" + String(msg).slice(0,150));
+            setLastSubmit("失败 · " + slot + " · " + String(msg).slice(0,60));
             taken.add(slot);
           }
           submitted = true;
         }
-        if(!submitted) log("目标岗位均已被占，继续盯…");
+        if(!submitted) setRunInfo("最近检查：" + new Date().toLocaleTimeString() + "　目标岗位均已被占，继续盯…");
       }
     }catch(e){
       log("请求出错：" + e.message);
+      setRunInfo("最近检查：" + new Date().toLocaleTimeString() + "　请求出错");
     }
     await new Promise(r=>setTimeout(r, delay));
   }
@@ -408,6 +489,7 @@ function saveConfig(){
   LS.set("jl_thread", cur);
   LS.set("jl_interval", parseInt($("interval").value)||200);
   LS.set("jl_autoMode", $("autoMode").checked);
+  LS.set("jl_personName", ($("personName").value||"").trim());
 }
 
 let inputTimer = null;
@@ -437,6 +519,7 @@ async function autoRun(){
   $("threadInput").value = LS.get("jl_thread", {}).input || "";
   $("interval").value = LS.get("jl_interval", 200);
   $("autoMode").checked = LS.get("jl_autoMode", true);
+  $("personName").value = LS.get("jl_personName", "");
   renderAccounts();
   if(activeIdx < 0 && accounts.length > 0){ activeIdx = 0; LS.set("jl_active", 0); renderAccounts(); }
   if(!targets.length) targets = LS.get("jl_targets", []);
