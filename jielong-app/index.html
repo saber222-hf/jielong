@@ -27,12 +27,11 @@
   button:disabled { opacity:.5; }
   .row { display:flex; gap:10px; }
   .row > * { flex:1; }
-  .switch { position:relative; width:56px; height:30px; flex:none; }
-  .switch input { display:none; }
+  .switch { position:relative; width:56px; height:30px; flex:none; cursor:pointer; }
   .slider { position:absolute; inset:0; background:#ccc; border-radius:30px; transition:.2s; }
   .slider:before { content:""; position:absolute; width:24px; height:24px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow:0 1px 3px rgba(0,0,0,.2); }
-  .switch input:checked + .slider { background:var(--ok); }
-  .switch input:checked + .slider:before { transform:translateX(26px); }
+  .switch.on .slider { background:var(--ok); }
+  .switch.on .slider:before { transform:translateX(26px); }
   .slot-list { max-height:300px; overflow:auto; border:1px solid #eee; border-radius:10px; margin-top:8px; }
   .slot { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid #f2f2f2; font-size:13px; }
   .slot:last-child { border-bottom:0; }
@@ -90,11 +89,12 @@
   <!-- 运行 -->
   <div class="card">
     <h3>自动抢报
-      <span class="switch"><input type="checkbox" id="enable" onchange="onToggle()"><span class="slider"></span></span>
+      <div class="switch" id="enable" role="switch" aria-checked="false" onclick="toggleEnable()"><span class="slider"></span></div>
     </h3>
     <div class="row">
       <div><label>轮询间隔(毫秒)</label><input id="interval" type="number" value="200" onchange="saveConfig()"></div>
     </div>
+    <button id="startBtn" class="ghost" onclick="toggleEnable()" style="margin-top:10px">开始抢报</button>
     <div class="muted" style="margin-top:8px">开启后建议让本页面保持在前台，不要锁屏。</div>
     <div style="margin-top:10px"><span class="statusdot" id="dot"></span><span id="runState" class="muted">已暂停</span></div>
     <div class="muted" id="runInfo" style="margin-top:6px">最近检查：--　接龙开放：--</div>
@@ -320,6 +320,13 @@ function onSlotChange(cb){
 
 /* ---------- 抢报主循环 ---------- */
 let runSeq = 0;
+let enabled = false;
+function setEnable(on){
+  enabled = on;
+  const sw = $("enable");
+  if(sw){ sw.classList.toggle("on", on); sw.setAttribute("aria-checked", on ? "true" : "false"); }
+  if($("startBtn")) $("startBtn").textContent = on ? "暂停抢报" : "开始抢报";
+}
 function setRunning(on, text){
   grabbing = on;
   $("dot").classList.toggle("on", on);
@@ -330,12 +337,14 @@ function setLastSubmit(t){ $("lastSubmit").textContent = "上次提交：" + t; 
 function stopGrab(){
   runSeq++;
   setRunning(false, "已暂停");
+  setEnable(false);
   document.title = "已暂停 · 接龙抢报助手";
   log("已手动停止");
 }
-async function onToggle(){
+function toggleEnable(){
   if(grabbing){ stopGrab(); return; }
-  await startGrab();
+  setEnable(true);
+  startGrab();
 }
 async function discoverNameField(tid, token){
   // 1) 优先从 GetThreadDetailToEdit 取字段配置
@@ -378,18 +387,18 @@ function buildAttendBody(tid, slot, name, nameField, hasPreset){
 async function startGrab(){
   if(grabbing) return;
   const token = currentToken();
-  if(!token){ $("enable").checked=false; setRunning(false,"未登录"); alert("请先登录账号"); return; }
+  if(!token){ setEnable(false); setRunning(false,"未登录"); alert("请先登录账号"); return; }
   const parsed = parseThreadInput($("threadInput").value);
-  if(!parsed){ $("enable").checked=false; setRunning(false,"未填链接"); alert("请先填写接龙链接或短码"); return; }
-  if(targets.length === 0){ $("enable").checked=false; setRunning(false,"未选岗位"); alert("请先「获取岗位列表」并勾选目标岗位"); return; }
+  if(!parsed){ setEnable(false); setRunning(false,"未填链接"); alert("请先填写接龙链接或短码"); return; }
+  if(targets.length === 0){ setEnable(false); setRunning(false,"未选岗位"); alert("请先「获取岗位列表」并勾选目标岗位"); return; }
   let tid;
   try{ tid = await resolveThread(parsed, token); }
-  catch(e){ $("enable").checked=false; setRunning(false,"解析失败"); alert("解析接龙失败：" + e.message); return; }
+  catch(e){ setEnable(false); setRunning(false,"解析失败"); alert("解析接龙失败：" + e.message); return; }
 
   const interval = Math.max(100, parseInt($("interval").value)||200);
   const name = ($("personName").value||"").trim();
   const seq = ++runSeq;
-  $("enable").checked = true;
+  setEnable(true);
   setRunning(true, "启动中…");
   document.title = "运行中 · 接龙抢报助手";
   log("开始抢报（接龙 " + tid + "）目标 " + targets.length + " 个，间隔 " + interval + "ms" + (name ? ("，姓名：" + name) : ""));
@@ -402,7 +411,7 @@ async function startGrab(){
     hasPreset = !!(d0 && d0.Data && d0.Data.Thread && d0.Data.Thread.NameRange);
   }catch(e){}
   if(nameField && nameField.id > 0 && nameField.required && !name){
-    $("enable").checked=false; setRunning(false,"需填姓名");
+    setEnable(false); setRunning(false,"需填姓名");
     log("该接龙需要填写姓名，已停止，请在「报名姓名」中填写");
     alert("该接龙需要填写姓名，请先在「报名姓名」输入框中填写");
     return;
@@ -415,7 +424,7 @@ async function startGrab(){
       const det = await api("/api/FeedBack/ThreadDetail?threadId=" + tid, {token});
       if(!det || det.Type !== "000001" || typeof det.Data === "string" || !det.Data || !det.Data.FeedBack){
         setRunning(false, "令牌过期/异常");
-        $("enable").checked = false;
+        setEnable(false);
         document.title = "出错 · 接龙抢报助手";
         log("读取接龙失败（令牌可能已过期，请重新扫码登录）：" + JSON.stringify(det).slice(0,180));
         return;
@@ -423,7 +432,7 @@ async function startGrab(){
       const fb = det.Data.FeedBack;
       if(fb.IsEnd){
         setRunning(false, "已结束");
-        $("enable").checked = false;
+        setEnable(false);
         document.title = "已结束 · 接龙抢报助手";
         log("接龙已结束，停止等待");
         return;
@@ -458,7 +467,7 @@ async function startGrab(){
           if(resp && resp.Type === "000001"){
             log("✅ 抢到了：" + slot);
             setRunning(false, "✅ 已抢到");
-            $("enable").checked = false;
+            setEnable(false);
             document.title = "✅ 已抢到 · " + slot;
             setLastSubmit("成功 · " + slot);
             if(navigator.vibrate){ try{ navigator.vibrate([200,100,200]); }catch(e){} }
@@ -507,7 +516,7 @@ async function autoRun(){
   try{ await loadSlots(); }catch(e){ return; }
   if(targets.length > 0){
     log("自动模式：发现目标岗位，立即开抢");
-    $("enable").checked = true;
+    setEnable(true);
     startGrab();
   } else {
     log("自动模式：岗位已加载，但保存的目标不在本次接龙里，请手动勾选");
